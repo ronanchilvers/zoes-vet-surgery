@@ -7,6 +7,32 @@
     return JSON.parse(JSON.stringify(value));
   }
 
+  function normalizeAppointmentStatus(status) {
+    var value = String(status || "").trim().toLowerCase();
+
+    if (value === "follow-up needed" || value === "follow up needed" || value === "follow-up") {
+      return "follow up";
+    }
+
+    if (value === "booked" || value === "in progress" || value === "follow up" || value === "treated" || value === "cancelled") {
+      return value;
+    }
+
+    return "booked";
+  }
+
+  function normalizeData(data) {
+    var nextData = clone(data);
+
+    if (Array.isArray(nextData.appointments)) {
+      nextData.appointments.forEach(function (appointment) {
+        appointment.status = normalizeAppointmentStatus(appointment.status);
+      });
+    }
+
+    return nextData;
+  }
+
   function readRaw() {
     try {
       return JSON.parse(localStorage.getItem(STORAGE_KEY));
@@ -16,8 +42,9 @@
   }
 
   function write(data) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    return clone(data);
+    var normalized = normalizeData(data);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+    return clone(normalized);
   }
 
   function seed() {
@@ -31,7 +58,7 @@
       return seed();
     }
 
-    return clone(data);
+    return write(data);
   }
 
   function reset() {

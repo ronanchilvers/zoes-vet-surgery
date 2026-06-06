@@ -11,6 +11,11 @@
   var focusedNoticeId = null;
   var appointmentTimerId = null;
   var toastTimerId = null;
+  var APPOINTMENT_TABS = [
+    { id: "open", label: "Open" },
+    { id: "follow-up", label: "Follow Up" },
+    { id: "closed", label: "Closed" }
+  ];
   var uiState = {
     clientsQuery: "",
     petsQuery: "",
@@ -21,9 +26,11 @@
     selectedPetId: "pet-001",
     editingPetId: null,
     appointmentsQuery: "",
+    appointmentsTab: "open",
     appointmentPanel: "detail",
     selectedAppointmentId: "appt-001",
     editingAppointmentId: null,
+    sidebarSettingsOpen: false,
     medicationsQuery: "",
     treatmentsQuery: "",
     medicationPanel: "detail",
@@ -38,6 +45,56 @@
     invalidFields: [],
     toast: null
   };
+
+  function normalizeAppointmentStatus(status) {
+    var value = String(status || "").trim().toLowerCase();
+
+    if (value === "follow-up needed" || value === "follow up needed" || value === "follow-up") {
+      return "follow up";
+    }
+
+    if (value === "cancelled") {
+      return "cancelled";
+    }
+
+    if (value === "booked" || value === "in progress" || value === "treated" || value === "follow up") {
+      return value;
+    }
+
+    return "booked";
+  }
+
+  function isOpenAppointmentStatus(status) {
+    var normalized = normalizeAppointmentStatus(status);
+    return normalized === "booked" || normalized === "in progress";
+  }
+
+  function isFollowUpAppointmentStatus(status) {
+    return normalizeAppointmentStatus(status) === "follow up";
+  }
+
+  function isClosedAppointmentStatus(status) {
+    var normalized = normalizeAppointmentStatus(status);
+    return normalized === "treated" || normalized === "cancelled";
+  }
+
+  function getAppointmentTabItems(items, tabId) {
+    if (tabId === "follow-up") {
+      return items.filter(function (item) {
+        return isFollowUpAppointmentStatus(item.appointment.status);
+      });
+    }
+
+    if (tabId === "closed") {
+      return items.filter(function (item) {
+        return isClosedAppointmentStatus(item.appointment.status);
+      });
+    }
+
+    return items.filter(function (item) {
+      return isOpenAppointmentStatus(item.appointment.status);
+    });
+  }
 
   var sections = [
     {
@@ -144,6 +201,7 @@
 
   function clearSession() {
     localStorage.removeItem(SESSION_KEY);
+    stopAppointmentTimer();
   }
 
   function getActiveSection() {
@@ -158,6 +216,7 @@
   }
 
   function renderLogin() {
+    stopAppointmentTimer();
     app.className = "app-shell";
     app.innerHTML = [
       '<main class="login-screen">',
@@ -295,11 +354,18 @@
       "    </div>",
       '    <div class="sidebar-footer">',
       '      <button class="secondary-button" type="button" data-action="quick-book">Book appointment</button>',
-      '      <button class="ghost-button danger-button" type="button" data-action="generate-emergency-appointment">Add emergency case</button>',
-      '      <button class="ghost-button" type="button" data-action="toggle-appointment-timer">' + (timerEnabled ? "Disable auto cases" : "Enable auto cases") + '</button>',
-      '      <button class="ghost-button" type="button" data-action="export-data">Export data</button>',
-      '      <button class="ghost-button" type="button" data-action="import-data">Import data</button>',
-      '      <button class="ghost-button" type="button" data-action="reset-data">Reset seed data</button>',
+      '      <div class="sidebar-settings-wrap">',
+      '        <button class="ghost-button" type="button" data-action="toggle-settings-menu" aria-expanded="' + (uiState.sidebarSettingsOpen ? "true" : "false") + '">Settings</button>',
+      uiState.sidebarSettingsOpen ? [
+        '        <div class="sidebar-flyout" role="menu" aria-label="Sidebar settings">',
+        '          <button class="ghost-button danger-button" type="button" data-action="generate-emergency-appointment">Add emergency case</button>',
+        '          <button class="ghost-button" type="button" data-action="toggle-appointment-timer">' + (timerEnabled ? "Disable auto cases" : "Enable auto cases") + "</button>",
+        '          <button class="ghost-button" type="button" data-action="export-data">Export data</button>',
+        '          <button class="ghost-button" type="button" data-action="import-data">Import data</button>',
+        '          <button class="ghost-button" type="button" data-action="reset-data">Reset seed data</button>',
+        "        </div>"
+      ].join("") : "",
+      "      </div>",
       '      <button class="ghost-button" type="button" data-action="logout">Log out</button>',
       "    </div>",
       "  </aside>"
@@ -334,7 +400,12 @@
       return "";
     }
 
-    return '<div class="toast" role="status" aria-live="polite">' + escapeHtml(uiState.toast.message) + "</div>";
+    return [
+      '<button class="toast toast-' + escapeHtml(uiState.toast.variant || "default") + '" type="button" data-action="dismiss-toast" role="' + (uiState.toast.variant === "danger" ? "alert" : "status") + '" aria-live="' + (uiState.toast.variant === "danger" ? "assertive" : "polite") + '">',
+      '  <strong class="toast-title">' + escapeHtml(uiState.toast.title) + "</strong>",
+      uiState.toast.message ? '  <span class="toast-message">' + escapeHtml(uiState.toast.message) + "</span>" : "",
+      "</button>"
+    ].join("");
   }
 
   function renderNavButton(section, active) {
@@ -471,7 +542,6 @@
     return [
       '<section class="view" aria-labelledby="view-title">',
       renderViewHeader(section),
-      renderSummary(summary, issues),
       renderNotice(),
       renderClientWorkspace(data),
       "</section>"
@@ -482,7 +552,6 @@
     return [
       '<section class="view" aria-labelledby="view-title">',
       renderViewHeader(section),
-      renderSummary(summary, issues),
       renderNotice(),
       renderPetWorkspace(data),
       "</section>"
@@ -493,7 +562,6 @@
     return [
       '<section class="view" aria-labelledby="view-title">',
       renderViewHeader(section),
-      renderSummary(summary, issues),
       renderNotice(),
       renderAppointmentWorkspace(data),
       "</section>"
@@ -504,7 +572,6 @@
     return [
       '<section class="view" aria-labelledby="view-title">',
       renderViewHeader(section),
-      renderSummary(summary, issues),
       renderNotice(),
       renderCatalogueWorkspace(data, section.id),
       "</section>"
@@ -526,7 +593,6 @@
     return [
       '<section class="view" aria-labelledby="view-title">',
       renderViewHeader(section),
-      renderSummary(summary, issues),
       renderNotice(),
       renderCalendarWorkspace(data),
       "</section>"
@@ -557,6 +623,7 @@
       "    </div>",
       '    <div class="view-actions">',
       renderActions(section),
+      '      <button class="ghost-button" type="button" data-action="logout">Log out</button>',
       "    </div>",
       "  </header>"
     ].join("");
@@ -574,22 +641,34 @@
     ].join("");
   }
 
+  function isDashboardAppointment(appointment) {
+    return isOpenAppointmentStatus(appointment.status);
+  }
+
   function renderDashboardSummary(data, summary, issues) {
     var appointments = buildAppointmentItems(data);
     var today = startOfDay(new Date());
+    var dashboardAppointments = appointments.filter(function (item) {
+      return isDashboardAppointment(item.appointment);
+    });
     var treatedToday = appointments.filter(function (item) {
       return isSameDay(new Date(item.appointment.startsAt), today) && item.appointment.status === "treated";
     }).length;
-    var openToday = appointments.filter(function (item) {
-      return isSameDay(new Date(item.appointment.startsAt), today) && item.appointment.status !== "treated";
+    var openToday = dashboardAppointments.filter(function (item) {
+      return isSameDay(new Date(item.appointment.startsAt), today);
+    }).length;
+    var dashboardUrgent = dashboardAppointments.filter(function (item) {
+      return item.appointment.severity === "high";
     }).length;
 
     return [
       '<dl class="summary-strip dashboard-summary" aria-label="Dashboard summary">',
-      renderMetric("Today", summary.todaysAppointments),
+      renderMetric("Today", dashboardAppointments.filter(function (item) {
+        return isSameDay(new Date(item.appointment.startsAt), today);
+      }).length),
       renderMetric("Open today", openToday),
       renderMetric("Treated today", treatedToday),
-      renderMetric("Urgent", summary.urgentAppointments),
+      renderMetric("Urgent", dashboardUrgent),
       renderMetric("Procedures", summary.procedures),
       renderMetric("Validation", issues.length ? issues.length + " issues" : "OK"),
       "</dl>"
@@ -599,13 +678,16 @@
   function renderDashboardWorkspace(data) {
     var appointments = buildAppointmentItems(data);
     var today = startOfDay(new Date());
-    var todaysAppointments = appointments.filter(function (item) {
+    var dashboardAppointments = appointments.filter(function (item) {
+      return isDashboardAppointment(item.appointment);
+    });
+    var todaysAppointments = dashboardAppointments.filter(function (item) {
       return isSameDay(new Date(item.appointment.startsAt), today);
     });
-    var urgentAppointments = appointments.filter(function (item) {
-      return item.appointment.severity === "high" || item.appointment.status === "follow-up needed";
+    var urgentAppointments = dashboardAppointments.filter(function (item) {
+      return item.appointment.severity === "high";
     }).slice(0, 5);
-    var upcomingAppointments = appointments.filter(function (item) {
+    var upcomingAppointments = dashboardAppointments.filter(function (item) {
       return new Date(item.appointment.startsAt) >= today;
     }).slice(0, 5);
 
@@ -651,7 +733,7 @@
       "      <h3>Urgent Cases</h3>",
       "    </div>",
       "  </div>",
-      renderDashboardAppointmentList(items, "No urgent or follow-up cases."),
+      renderDashboardAppointmentList(items, "No urgent cases."),
       "</section>"
     ].join("");
   }
@@ -884,26 +966,34 @@
 
   function renderAppointmentWorkspace(data) {
     var enriched = buildAppointmentItems(data);
-    var appointments = enriched.map(function (item) {
-      return item.appointment;
-    });
-    var filteredAppointments = filterAppointments(enriched, uiState.appointmentsQuery);
-    var selectedAppointment = appointments.find(function (appointment) {
-      return appointment.id === uiState.selectedAppointmentId;
-    }) || (filteredAppointments[0] && filteredAppointments[0].appointment) || appointments[0] || null;
+    var tabAppointments = getAppointmentTabItems(enriched, uiState.appointmentsTab);
+    var filteredAppointments = filterAppointments(tabAppointments, uiState.appointmentsQuery);
+    var selectedAppointment = filteredAppointments.find(function (item) {
+      return item.appointment.id === uiState.selectedAppointmentId;
+    }) || tabAppointments.find(function (item) {
+      return item.appointment.id === uiState.selectedAppointmentId;
+    }) || filteredAppointments[0] || tabAppointments[0] || null;
 
     if (selectedAppointment && uiState.appointmentPanel === "detail") {
-      uiState.selectedAppointmentId = selectedAppointment.id;
+      uiState.selectedAppointmentId = selectedAppointment.appointment ? selectedAppointment.appointment.id : selectedAppointment.id;
+    }
+
+    var activeAppointment = selectedAppointment && selectedAppointment.appointment ? selectedAppointment.appointment : selectedAppointment;
+    var inspectorClass = "records-inspector";
+
+    if (activeAppointment && (activeAppointment.severity === "high" || activeAppointment.severity === "medium")) {
+      inspectorClass += " records-inspector-" + activeAppointment.severity + "-severity";
     }
 
     return [
       '<div class="records-layout">',
       '  <section class="records-pane" aria-label="Appointment list">',
       renderSearch("appointments", "Search appointments", uiState.appointmentsQuery),
+      renderAppointmentTabs(enriched),
       renderAppointmentList(filteredAppointments),
       "  </section>",
-      '  <aside class="records-inspector" aria-label="Appointment details">',
-      uiState.appointmentPanel === "form" ? renderAppointmentForm(data, selectedAppointment) : renderAppointmentDetail(data, selectedAppointment),
+      '  <aside class="' + inspectorClass + '" aria-label="Appointment details">',
+      uiState.appointmentPanel === "form" ? renderAppointmentForm(data, activeAppointment) : renderAppointmentDetail(data, activeAppointment),
       "  </aside>",
       "</div>"
     ].join("");
@@ -1011,7 +1101,7 @@
 
   function renderAppointmentList(items) {
     if (!items.length) {
-      return '<p class="empty-note">No appointments match this search.</p>';
+      return '<p class="empty-note">' + escapeHtml(getAppointmentEmptyMessage()) + "</p>";
     }
 
     return [
@@ -1038,6 +1128,35 @@
       }).join(""),
       "</div>"
     ].join("");
+  }
+
+  function renderAppointmentTabs(items) {
+    return [
+      '<div class="tab-strip" role="tablist" aria-label="Appointment status groups">',
+      APPOINTMENT_TABS.map(function (tab) {
+        var count = getAppointmentTabItems(items, tab.id).length;
+        var active = uiState.appointmentsTab === tab.id;
+        return [
+          '<button class="secondary-button tab-button' + (active ? " is-active" : "") + '" type="button" role="tab" aria-selected="' + (active ? "true" : "false") + '" data-action="set-appointments-tab" data-tab="' + tab.id + '">',
+          "  <strong>" + escapeHtml(tab.label) + "</strong>",
+          '  <span class="tab-count">' + count + "</span>",
+          "</button>"
+        ].join("");
+      }).join(""),
+      "</div>"
+    ].join("");
+  }
+
+  function getAppointmentEmptyMessage() {
+    if (uiState.appointmentsTab === "follow-up") {
+      return "No follow up appointments match this search.";
+    }
+
+    if (uiState.appointmentsTab === "closed") {
+      return "No treated or cancelled appointments match this search.";
+    }
+
+    return "No open appointments match this search.";
   }
 
   function renderCatalogueList(items, actionPrefix, selectedItem) {
@@ -1158,9 +1277,14 @@
       renderDetail("When", models.formatAppointmentTime(appointment.startsAt)),
       renderDetail("Owner", client ? client.name : "Missing owner"),
       renderDetail("Severity", appointment.severity),
-      renderDetail("Status", appointment.status),
+      renderDetail("Status", titleCase(normalizeAppointmentStatus(appointment.status))),
       renderDetail("Reason", appointment.reason),
       renderDetail("Notes", String(notes.length)),
+      "</dl>",
+      '<dl class="detail-grid">',
+      renderDetail("Pet Description", pet ? pet.species : "Missing pet"),
+      renderDetail("Breed", pet ? pet.description : "Missing pet"),
+      renderDetail("Age", pet ? pet.age + " year" + (Number(pet.age) === 1 ? "" : "s") : "Missing pet"),
       "</dl>",
       '<h4>Status</h4>',
       renderStatusControls(appointment),
@@ -1169,7 +1293,7 @@
       '<h4>Procedure History</h4>',
       renderAppointmentProcedureHistory(data, appointment),
       '<h4>Consultation Notes</h4>',
-      renderNotes(notes),
+      renderNotes(notes, appointment.id),
       renderNoteForm()
     ].join("");
   }
@@ -1226,7 +1350,7 @@
 
   function renderAppointmentForm(data, appointment) {
     var isEditing = Boolean(uiState.editingAppointmentId && appointment);
-    var pets = models.collection(data, "pets");
+    var pets = sortRecordsByName(models.collection(data, "pets"));
     var firstPet = pets[0] || null;
     var startsAt = isEditing ? new Date(appointment.startsAt) : new Date();
     var record = isEditing ? appointment : {
@@ -1236,6 +1360,7 @@
       severity: "medium",
       status: "booked"
     };
+    var appointmentStatus = normalizeAppointmentStatus(record.status);
 
     return [
       '<form class="record-form" data-form="appointment" novalidate>',
@@ -1251,7 +1376,7 @@
       renderInput("appointment-time", "Time", "time", timeInputValue(startsAt), "time", true),
       renderTextarea("appointment-reason", "Reason", "reason", record.reason, true),
       renderOptionSelect("appointment-severity", "Severity", "severity", ["low", "medium", "high"], record.severity),
-      renderOptionSelect("appointment-status", "Status", "status", ["booked", "in progress", "treated", "follow-up needed"], record.status),
+      renderOptionSelect("appointment-status", "Status", "status", ["booked", "in progress", "follow up", "treated", "cancelled"], appointmentStatus),
       '<button class="primary-button form-submit" type="submit">' + (isEditing ? "Save appointment" : "Book appointment") + "</button>",
       "</form>"
     ].join("");
@@ -1281,7 +1406,7 @@
 
   function renderPetForm(data, pet) {
     var isEditing = Boolean(uiState.editingPetId && pet);
-    var clients = models.collection(data, "clients");
+    var clients = sortRecordsByName(models.collection(data, "clients"));
     var record = isEditing ? pet : {
       name: "",
       clientId: uiState.selectedClientId || (clients[0] && clients[0].id) || "",
@@ -1323,12 +1448,13 @@
 
   function renderSelect(id, label, name, options, value) {
     var invalid = isFieldInvalid(id);
+    var sortedOptions = sortRecordsByName(options);
 
     return [
       '<label class="field" for="' + id + '">',
       "  <span>" + label + "</span>",
       '  <select id="' + id + '" name="' + name + '" required' + renderInvalidAttributes(id, invalid) + ">",
-      options.map(function (option) {
+      sortedOptions.map(function (option) {
         var selected = option.id === value ? " selected" : "";
         return '<option value="' + option.id + '"' + selected + ">" + escapeHtml(option.name) + "</option>";
       }).join(""),
@@ -1339,7 +1465,7 @@
   }
 
   function renderPetAppointmentSelect(data, value) {
-    var pets = models.collection(data, "pets");
+    var pets = sortRecordsByName(models.collection(data, "pets"));
     var clients = models.collection(data, "clients");
 
     return [
@@ -1355,6 +1481,14 @@
       isFieldInvalid("appointment-pet") ? renderFieldError("appointment-pet", "Pet") : "",
       "</label>"
     ].join("");
+  }
+
+  function sortRecordsByName(items) {
+    return items.slice().sort(function (first, second) {
+      return String(first && first.name || "").localeCompare(String(second && second.name || ""), undefined, {
+        sensitivity: "base"
+      });
+    });
   }
 
   function renderOptionSelect(id, label, name, options, value) {
@@ -1436,10 +1570,10 @@
       appointments.map(function (appointment) {
         var pet = findById(models.collection(data, "pets"), appointment.petId);
         return [
-          '<div class="history-item">',
+          '<button class="history-item history-link" type="button" data-action="open-appointment-from-calendar" data-id="' + appointment.id + '">',
           "  <strong>" + escapeHtml(models.formatAppointmentTime(appointment.startsAt)) + "</strong>",
           "  <span>" + escapeHtml(pet ? pet.name + ": " + appointment.reason : appointment.reason) + "</span>",
-          "</div>"
+          "</button>"
         ].join("");
       }).join(""),
       "</div>"
@@ -1454,6 +1588,9 @@
           '<div class="history-item">',
           "  <strong>" + escapeHtml(titleCase(procedure.type || "Procedure")) + " · " + escapeHtml(formatDateOnly(procedure.performedAt)) + "</strong>",
           "  <span>" + escapeHtml(procedure.itemName || "No catalogue item") + " · " + escapeHtml(procedure.notes || "No notes") + "</span>",
+          '  <div class="history-actions">',
+          '    <button class="ghost-button compact-button danger-button" type="button" data-action="delete-procedure" data-id="' + procedure.id + '">Delete</button>',
+          "  </div>",
           "</div>"
         ].join("");
       }).join(""),
@@ -1488,7 +1625,7 @@
       renderOptionSelect("procedure-type-" + idSuffix, "Procedure type", "type", ["checkup", "operation", "medication", "treatment"], "checkup"),
       renderCatalogueChoice(data),
       renderInput("procedure-date-" + idSuffix, "Date", "performedAt", today, "date", true),
-      renderTextarea("procedure-notes-" + idSuffix, "Notes", "notes", "", true),
+      renderTextarea("procedure-notes-" + idSuffix, "Notes", "notes", "", false),
       '<button class="primary-button form-submit" type="submit">Record procedure</button>',
       "</form>"
     ].join("");
@@ -1515,19 +1652,20 @@
   }
 
   function renderStatusControls(appointment) {
-    var statuses = ["booked", "in progress", "treated", "follow-up needed"];
+    var currentStatus = normalizeAppointmentStatus(appointment.status);
+    var statuses = ["booked", "in progress", "follow up", "treated", "cancelled"];
 
     return [
       '<div class="status-actions">',
       statuses.map(function (status) {
-        var active = appointment.status === status ? " is-active" : "";
+        var active = currentStatus === status ? " is-active" : "";
         return '<button class="status-button' + active + '" type="button" data-action="set-appointment-status" data-id="' + appointment.id + '" data-status="' + status + '">' + escapeHtml(titleCase(status)) + "</button>";
       }).join(""),
       "</div>"
     ].join("");
   }
 
-  function renderNotes(notes) {
+  function renderNotes(notes, appointmentId) {
     if (!notes.length) {
       return '<p class="empty-note">No consultation notes recorded yet.</p>';
     }
@@ -1543,6 +1681,9 @@
           renderNoteLine("Checkup", note.checkup),
           renderNoteLine("Vet notes", note.vetNotes),
           renderNoteLine("Follow-up", note.followUp),
+          '  <div class="history-actions">',
+          '    <button class="ghost-button compact-button danger-button" type="button" data-action="delete-appointment-note" data-id="' + note.id + '" data-appointment-id="' + appointmentId + '">Delete</button>',
+          "  </div>",
           "</article>"
         ].join("");
       }).join(""),
@@ -1562,8 +1703,8 @@
     return [
       '<form class="record-form note-form" data-form="appointment-note" novalidate>',
       renderTextarea("note-symptoms", "Symptoms", "symptoms", "", true),
-      renderTextarea("note-diagnosis", "Diagnosis", "diagnosis", "", true),
-      renderTextarea("note-checkup", "Basic checkup", "checkup", "", true),
+      renderTextarea("note-diagnosis", "Diagnosis", "diagnosis", "", false),
+      renderTextarea("note-checkup", "Basic checkup", "checkup", "", false),
       renderTextarea("note-vet-notes", "Vet notes", "vetNotes", "", false),
       renderTextarea("note-follow-up", "Follow-up", "followUp", "", false),
       '<button class="primary-button form-submit" type="submit">Save consultation note</button>',
@@ -1646,6 +1787,7 @@
   function bindNavigation() {
     app.querySelectorAll("[data-route]").forEach(function (button) {
       button.addEventListener("click", function () {
+        uiState.sidebarSettingsOpen = false;
         window.location.hash = button.getAttribute("data-route");
       });
     });
@@ -1732,6 +1874,10 @@
   }
 
   function handleRecordAction(action, id, button) {
+    if (action !== "toggle-settings-menu") {
+      uiState.sidebarSettingsOpen = false;
+    }
+
     if (action === "add-client") {
       uiState.clientPanel = "form";
       uiState.editingClientId = null;
@@ -1810,6 +1956,11 @@
       return;
     }
 
+    if (action === "delete-procedure") {
+      deleteProcedure(id);
+      return;
+    }
+
     if (action === "open-pet-from-client") {
       uiState.selectedPetId = id;
       uiState.petPanel = "detail";
@@ -1833,6 +1984,7 @@
     if (action === "view-appointment") {
       uiState.appointmentPanel = "detail";
       uiState.selectedAppointmentId = id;
+      syncAppointmentTabForAppointment(id);
       uiState.editingAppointmentId = null;
       uiState.notice = null;
       renderApp();
@@ -1842,6 +1994,7 @@
     if (action === "edit-appointment") {
       uiState.appointmentPanel = "form";
       uiState.selectedAppointmentId = id;
+      syncAppointmentTabForAppointment(id);
       uiState.editingAppointmentId = id;
       uiState.notice = null;
       renderApp();
@@ -1861,6 +2014,19 @@
       return;
     }
 
+    if (action === "delete-appointment-note") {
+      deleteAppointmentNote(button ? button.getAttribute("data-appointment-id") : "", id);
+      return;
+    }
+
+    if (action === "set-appointments-tab") {
+      uiState.appointmentsTab = button ? button.getAttribute("data-tab") || "open" : "open";
+      uiState.notice = null;
+      syncSelectedAppointmentForActiveTab();
+      renderApp();
+      return;
+    }
+
     if (action === "generate-appointment") {
       generateAppointment();
       return;
@@ -1876,9 +2042,21 @@
       return;
     }
 
+    if (action === "toggle-settings-menu") {
+      uiState.sidebarSettingsOpen = !uiState.sidebarSettingsOpen;
+      renderApp();
+      return;
+    }
+
+    if (action === "dismiss-toast") {
+      dismissToast();
+      return;
+    }
+
     if (action === "open-appointment-from-calendar") {
       uiState.appointmentPanel = "detail";
       uiState.selectedAppointmentId = id;
+      syncAppointmentTabForAppointment(id);
       uiState.editingAppointmentId = null;
       uiState.notice = null;
       window.location.hash = "appointments";
@@ -2103,7 +2281,7 @@
     var time = String(formData.get("time") || "").trim();
     var reason = String(formData.get("reason") || "").trim();
     var severity = String(formData.get("severity") || "medium").trim();
-    var status = String(formData.get("status") || "booked").trim();
+    var status = normalizeAppointmentStatus(formData.get("status") || "booked");
     var data = dataApi.read();
     var pet = findById(data.pets, petId);
 
@@ -2138,6 +2316,7 @@
       }
     });
 
+    syncAppointmentTabForStatus(status);
     uiState.appointmentPanel = "detail";
     uiState.editingAppointmentId = null;
     setNotice("success", "Appointment saved.");
@@ -2157,8 +2336,8 @@
       followUp: String(formData.get("followUp") || "").trim()
     };
 
-    if (!note.symptoms || !note.diagnosis || !note.checkup) {
-      setNotice("error", "Please record symptoms, diagnosis, and basic checkup results.", ["note-symptoms", "note-diagnosis", "note-checkup"]);
+    if (!note.symptoms) {
+      setNotice("error", "Please record symptoms before saving the consultation note.", ["note-symptoms"]);
       renderApp();
       return;
     }
@@ -2180,18 +2359,21 @@
   }
 
   function setAppointmentStatus(id, status) {
-    if (!id || !status) {
+    var nextStatus = normalizeAppointmentStatus(status);
+
+    if (!id || !nextStatus) {
       return;
     }
 
     dataApi.update(function (data) {
       var appointment = findById(data.appointments, id);
       if (appointment) {
-        appointment.status = status;
+        appointment.status = nextStatus;
       }
     });
 
-    setNotice("success", "Appointment marked " + status + ".");
+    syncAppointmentTabForStatus(nextStatus);
+    setNotice("success", "Appointment marked " + titleCase(nextStatus) + ".");
     renderApp();
   }
 
@@ -2232,9 +2414,11 @@
       "has severe pain and must be seen straight away.",
       "is breathing quickly and needs urgent attention."
     ];
+    var createdAppointment = null;
+    var createdPetName = "";
 
     dataApi.update(function (data) {
-      var appointment = createGeneratedAppointment(data, {
+      createdAppointment = createGeneratedAppointment(data, {
         templates: emergencyTemplates.map(function (reason) {
           return { reason: reason, severity: "high" };
         }),
@@ -2243,15 +2427,27 @@
         status: "in progress"
       });
 
-      if (!appointment) {
+      if (!createdAppointment) {
         return;
       }
 
-      uiState.selectedAppointmentId = appointment.id;
+      var pet = findById(data.pets, createdAppointment.petId);
+      createdPetName = pet ? pet.name : "A pet";
+      uiState.selectedAppointmentId = createdAppointment.id;
     });
+
+    if (!createdAppointment) {
+      return;
+    }
 
     uiState.appointmentPanel = "detail";
     window.location.hash = "appointments";
+    showToast({
+      title: "Emergency case added",
+      message: createdPetName + " · High · " + models.formatAppointmentTime(createdAppointment.startsAt) + " · " + createdAppointment.reason,
+      variant: "danger",
+      persistent: true
+    });
     setNotice("success", "Emergency case added for immediate appointment.");
     renderApp();
   }
@@ -2260,7 +2456,7 @@
     var enabled = !getAppointmentTimerEnabled();
     setAppointmentTimerEnabled(enabled);
     syncAppointmentTimer();
-    setNotice("success", enabled ? "Automatic appointment timer enabled." : "Automatic appointment timer disabled.");
+    uiState.notice = null;
     renderApp();
   }
 
@@ -2327,11 +2523,10 @@
     var catalogueRef = String(formData.get("catalogueRef") || "").trim();
     var catalogueParts = catalogueRef ? catalogueRef.split(":") : [];
 
-    if (!petId || !type || !performedAt || !notes) {
-      setNotice("error", "Please choose a procedure type, date, and notes.", [
+    if (!petId || !type || !performedAt) {
+      setNotice("error", "Please choose a procedure type and date.", [
         "procedure-type-" + (appointmentId ? "appointment" : "pet"),
-        "procedure-date-" + (appointmentId ? "appointment" : "pet"),
-        "procedure-notes-" + (appointmentId ? "appointment" : "pet")
+        "procedure-date-" + (appointmentId ? "appointment" : "pet")
       ]);
       renderApp();
       return;
@@ -2460,6 +2655,58 @@
     renderApp();
   }
 
+  function deleteProcedure(id) {
+    var data = dataApi.read();
+    var procedure = findById(data.procedures, id);
+
+    if (!procedure) {
+      return;
+    }
+
+    if (!window.confirm("Delete this procedure history entry?")) {
+      return;
+    }
+
+    dataApi.update(function (nextData) {
+      nextData.procedures = nextData.procedures.filter(function (entry) {
+        return entry.id !== id;
+      });
+    });
+
+    setNotice("success", "Procedure history entry deleted.");
+    renderApp();
+  }
+
+  function deleteAppointmentNote(appointmentId, noteId) {
+    var data = dataApi.read();
+    var appointment = findById(data.appointments, appointmentId || uiState.selectedAppointmentId);
+    var notes = appointment && Array.isArray(appointment.notes) ? appointment.notes : [];
+    var note = findById(notes, noteId);
+
+    if (!appointment || !note) {
+      return;
+    }
+
+    if (!window.confirm("Delete this consultation note?")) {
+      return;
+    }
+
+    dataApi.update(function (nextData) {
+      var nextAppointment = findById(nextData.appointments, appointment.id);
+
+      if (!nextAppointment) {
+        return;
+      }
+
+      nextAppointment.notes = Array.isArray(nextAppointment.notes) ? nextAppointment.notes.filter(function (entry) {
+        return entry.id !== noteId;
+      }) : [];
+    });
+
+    setNotice("success", "Consultation note deleted.");
+    renderApp();
+  }
+
   function syncAppointmentTimer() {
     if (appointmentTimerId) {
       window.clearInterval(appointmentTimerId);
@@ -2475,23 +2722,39 @@
     }, getAppointmentTimerInterval());
   }
 
+  function stopAppointmentTimer() {
+    if (!appointmentTimerId) {
+      return;
+    }
+
+    window.clearInterval(appointmentTimerId);
+    appointmentTimerId = null;
+  }
+
   function addTimedAppointmentCase() {
-    var timedTemplates = [
+    var routineTemplates = [
       { reason: "has suddenly stopped eating and needs a gentle urgent check.", severity: "medium" },
       { reason: "is wobbling after play and needs triage this week.", severity: "high" },
       { reason: "has a sore paw and needs a quick follow-up appointment.", severity: "medium" },
       { reason: "is very quiet today and should be reviewed soon.", severity: "high" }
     ];
+    var emergencyTemplates = [
+      { reason: "needs emergency help after a sudden fall.", severity: "high" },
+      { reason: "is struggling to stand and needs immediate triage.", severity: "high" },
+      { reason: "has severe pain and must be seen straight away.", severity: "high" },
+      { reason: "is breathing quickly and needs urgent attention.", severity: "high" }
+    ];
     var createdAppointment = null;
     var createdPetName = "";
+    var isEmergency = Math.random() < 0.25;
 
     dataApi.update(function (data) {
       createdAppointment = createGeneratedAppointment(data, {
-        templates: timedTemplates,
+        templates: isEmergency ? emergencyTemplates : routineTemplates,
         petStride: 7,
         dayOffsetRange: 7,
-        immediate: false,
-        status: "booked",
+        immediate: isEmergency,
+        status: isEmergency ? "in progress" : "booked",
         randomize: true
       });
 
@@ -2507,7 +2770,15 @@
       return;
     }
 
-    showToast("New appointment added for " + createdPetName + ".");
+    showToast(isEmergency ? {
+      title: "Emergency appointment added",
+      message: createdPetName + " · High · " + models.formatAppointmentTime(createdAppointment.startsAt) + " · " + createdAppointment.reason,
+      variant: "danger",
+      persistent: true
+    } : {
+      title: "New appointment added",
+      message: createdPetName + " · " + titleCase(createdAppointment.severity) + " · " + models.formatAppointmentTime(createdAppointment.startsAt) + " · " + createdAppointment.reason
+    });
     renderApp();
   }
 
@@ -2553,19 +2824,42 @@
   }
 
   function showToast(message) {
+    var toast = typeof message === "string" ? { title: "Notice", message: message } : message;
+
     uiState.toast = {
       id: String(Date.now()),
-      message: message
+      title: toast.title || "Notice",
+      message: toast.message || "",
+      variant: toast.variant || "default",
+      persistent: Boolean(toast.persistent)
     };
 
     if (toastTimerId) {
       window.clearTimeout(toastTimerId);
+      toastTimerId = null;
     }
 
-    toastTimerId = window.setTimeout(function () {
-      uiState.toast = null;
-      renderApp();
-    }, 3200);
+    if (!uiState.toast.persistent) {
+      toastTimerId = window.setTimeout(function () {
+        uiState.toast = null;
+        toastTimerId = null;
+        renderApp();
+      }, 3200);
+    }
+  }
+
+  function dismissToast() {
+    if (toastTimerId) {
+      window.clearTimeout(toastTimerId);
+      toastTimerId = null;
+    }
+
+    if (!uiState.toast) {
+      return;
+    }
+
+    uiState.toast = null;
+    renderApp();
   }
 
   function exportData() {
@@ -2659,6 +2953,51 @@
         client: findById(clients, appointment.clientId)
       };
     });
+  }
+
+  function getAppointmentTabForStatus(status) {
+    if (isFollowUpAppointmentStatus(status)) {
+      return "follow-up";
+    }
+
+    if (isClosedAppointmentStatus(status)) {
+      return "closed";
+    }
+
+    return "open";
+  }
+
+  function syncAppointmentTabForStatus(status) {
+    uiState.appointmentsTab = getAppointmentTabForStatus(status);
+    syncSelectedAppointmentForActiveTab();
+  }
+
+  function syncAppointmentTabForAppointment(appointmentId) {
+    var appointment = findById(dataApi.read().appointments, appointmentId);
+
+    if (!appointment) {
+      return;
+    }
+
+    syncAppointmentTabForStatus(appointment.status);
+    uiState.selectedAppointmentId = appointment.id;
+  }
+
+  function syncSelectedAppointmentForActiveTab() {
+    var appointments = getAppointmentTabItems(buildAppointmentItems(dataApi.read()), uiState.appointmentsTab);
+    var hasCurrentSelection = appointments.some(function (item) {
+      return item.appointment.id === uiState.selectedAppointmentId;
+    });
+
+    if (hasCurrentSelection) {
+      return;
+    }
+
+    if (appointments.length) {
+      uiState.selectedAppointmentId = appointments[0].appointment.id;
+    } else {
+      uiState.selectedAppointmentId = null;
+    }
   }
 
   function recentPatientItems(data) {
@@ -2851,7 +3190,7 @@
       var haystack = [
         appointment.reason,
         appointment.severity,
-        appointment.status,
+        normalizeAppointmentStatus(appointment.status),
         petName,
         clientName,
         models.formatAppointmentTime(appointment.startsAt)
@@ -2862,7 +3201,8 @@
   }
 
   function renderBadge(value, type) {
-    return '<span class="record-badge ' + type + '-' + String(value).replace(/\s+/g, "-") + '">' + escapeHtml(titleCase(value)) + "</span>";
+    var displayValue = type === "status" ? normalizeAppointmentStatus(value) : String(value);
+    return '<span class="record-badge ' + type + '-' + String(displayValue).replace(/\s+/g, "-") + '">' + escapeHtml(titleCase(displayValue)) + "</span>";
   }
 
   function titleCase(value) {
