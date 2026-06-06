@@ -146,7 +146,7 @@
       '    <div class="brand-block">',
       '      <span class="brand-mark" aria-hidden="true">ZV</span>',
       '      <h1 id="app-title">Zoe\'s Vet Surgery</h1>',
-      '      <p>A pretend clinic workspace for booking pets, checking symptoms, and keeping patient notes tidy.</p>',
+      '      <p>A clinic workspace for booking pets, checking symptoms, and keeping patient notes tidy.</p>',
       "    </div>",
       "  </section>",
       '  <section class="login-panel" aria-labelledby="login-title">',
