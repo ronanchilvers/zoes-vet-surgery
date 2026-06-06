@@ -290,7 +290,6 @@
       "        <strong>Zoe's Vet Surgery</strong>",
       "        <span>" + escapeHtml(session.username) + "</span>",
       "      </div>",
-      '      <button class="ghost-button" type="button" data-action="reset-data">Reset data</button>',
       '      <button class="ghost-button" type="button" data-action="logout">Log out</button>',
       "    </div>",
       '    <nav class="mobile-nav" aria-label="Primary navigation">',
@@ -408,17 +407,11 @@
     }
 
     if (section.id === "clients") {
-      return [
-        '<button class="secondary-button" type="button" data-action="add-client">Add client</button>',
-        '<button class="ghost-button" type="button" data-action="reset-data">Reset data</button>'
-      ].join("");
+      return '<button class="secondary-button" type="button" data-action="add-client">Add client</button>';
     }
 
     if (section.id === "pets") {
-      return [
-        '<button class="secondary-button" type="button" data-action="add-pet">Add pet</button>',
-        '<button class="ghost-button" type="button" data-action="reset-data">Reset data</button>'
-      ].join("");
+      return '<button class="secondary-button" type="button" data-action="add-pet">Add pet</button>';
     }
 
     if (section.id === "appointments") {
@@ -429,17 +422,11 @@
     }
 
     if (section.id === "medications") {
-      return [
-        '<button class="secondary-button" type="button" data-action="add-medication">Add medication</button>',
-        '<button class="ghost-button" type="button" data-action="reset-data">Reset data</button>'
-      ].join("");
+      return '<button class="secondary-button" type="button" data-action="add-medication">Add medication</button>';
     }
 
     if (section.id === "treatments") {
-      return [
-        '<button class="secondary-button" type="button" data-action="add-treatment">Add treatment</button>',
-        '<button class="ghost-button" type="button" data-action="reset-data">Reset data</button>'
-      ].join("");
+      return '<button class="secondary-button" type="button" data-action="add-treatment">Add treatment</button>';
     }
 
     return [
