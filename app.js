@@ -2,11 +2,15 @@
   "use strict";
 
   var SESSION_KEY = "zoes-vet-surgery-session";
+  var APPOINTMENT_TIMER_ENABLED_KEY = "zoes-vet-surgery-appointment-timer-enabled";
+  var APPOINTMENT_TIMER_INTERVAL = 10 * 60 * 1000;
   var app = document.getElementById("app");
   var dataApi = window.ZoeVetData;
   var models = window.ZoeVetModels;
   var noticeCounter = 0;
   var focusedNoticeId = null;
+  var appointmentTimerId = null;
+  var toastTimerId = null;
   var uiState = {
     clientsQuery: "",
     petsQuery: "",
@@ -31,7 +35,8 @@
     calendarMode: "week",
     calendarDate: dateInputValue(new Date()),
     notice: null,
-    invalidFields: []
+    invalidFields: [],
+    toast: null
   };
 
   var sections = [
@@ -121,6 +126,20 @@
       username: username,
       startedAt: new Date().toISOString()
     }));
+  }
+
+  function getAppointmentTimerEnabled() {
+    return localStorage.getItem(APPOINTMENT_TIMER_ENABLED_KEY) === "true";
+  }
+
+  function setAppointmentTimerEnabled(enabled) {
+    localStorage.setItem(APPOINTMENT_TIMER_ENABLED_KEY, enabled ? "true" : "false");
+  }
+
+  function getAppointmentTimerInterval() {
+    var search = new URLSearchParams(window.location.search);
+    var override = Number(search.get("timerMs"));
+    return Number.isFinite(override) && override > 0 ? override : APPOINTMENT_TIMER_INTERVAL;
   }
 
   function clearSession() {
@@ -229,6 +248,7 @@
       renderView(active, data),
       "  </main>",
       "</div>",
+      renderToast(),
       renderDataTransferControl()
     ].join("");
 
@@ -236,6 +256,7 @@
     bindManagement();
     bindLogout();
     bindReset();
+    syncAppointmentTimer();
     restoreFilterFocus(options);
     focusNotice();
   }
@@ -252,6 +273,7 @@
   function renderSidebar(session, active, data) {
     var summary = models.summarize(data);
     var issues = models.validate(data);
+    var timerEnabled = getAppointmentTimerEnabled();
 
     return [
       '  <aside class="sidebar" aria-label="Primary navigation">',
@@ -273,6 +295,8 @@
       "    </div>",
       '    <div class="sidebar-footer">',
       '      <button class="secondary-button" type="button" data-action="quick-book">Book appointment</button>',
+      '      <button class="ghost-button danger-button" type="button" data-action="generate-emergency-appointment">Add emergency case</button>',
+      '      <button class="ghost-button" type="button" data-action="toggle-appointment-timer">' + (timerEnabled ? "Disable auto cases" : "Enable auto cases") + '</button>',
       '      <button class="ghost-button" type="button" data-action="export-data">Export data</button>',
       '      <button class="ghost-button" type="button" data-action="import-data">Import data</button>',
       '      <button class="ghost-button" type="button" data-action="reset-data">Reset seed data</button>',
@@ -303,6 +327,14 @@
 
   function renderDataTransferControl() {
     return '<input class="sr-only" id="data-import-file" type="file" accept="application/json,.json" data-import-file tabindex="-1">';
+  }
+
+  function renderToast() {
+    if (!uiState.toast) {
+      return "";
+    }
+
+    return '<div class="toast" role="status" aria-live="polite">' + escapeHtml(uiState.toast.message) + "</div>";
   }
 
   function renderNavButton(section, active) {
@@ -1834,6 +1866,16 @@
       return;
     }
 
+    if (action === "generate-emergency-appointment") {
+      generateEmergencyAppointment();
+      return;
+    }
+
+    if (action === "toggle-appointment-timer") {
+      toggleAppointmentTimer();
+      return;
+    }
+
     if (action === "open-appointment-from-calendar") {
       uiState.appointmentPanel = "detail";
       uiState.selectedAppointmentId = id;
@@ -2164,34 +2206,61 @@
     ];
 
     dataApi.update(function (data) {
-      var pets = data.pets;
-      if (!pets.length) {
+      var appointment = createGeneratedAppointment(data, {
+        templates: caseTemplates,
+        petStride: 5,
+        dayOffsetRange: 9,
+        immediate: false
+      });
+
+      if (!appointment) {
         return;
       }
 
-      var template = caseTemplates[data.appointments.length % caseTemplates.length];
-      var pet = pets[(data.appointments.length * 5) % pets.length];
-      var startsAt = new Date();
-      startsAt.setDate(startsAt.getDate() + (data.appointments.length % 9) + 1);
-      startsAt.setHours(9 + (data.appointments.length % 7), data.appointments.length % 2 ? 30 : 0, 0, 0);
-
-      var appointment = {
-        id: nextId("appt", data.appointments),
-        petId: pet.id,
-        clientId: pet.clientId,
-        startsAt: startsAt.toISOString(),
-        reason: pet.name + " " + template.reason,
-        severity: template.severity,
-        status: "booked",
-        notes: []
-      };
-
-      data.appointments.push(appointment);
       uiState.selectedAppointmentId = appointment.id;
     });
 
     uiState.appointmentPanel = "detail";
     setNotice("success", "Generated a new appointment case.");
+    renderApp();
+  }
+
+  function generateEmergencyAppointment() {
+    var emergencyTemplates = [
+      "needs emergency help after a sudden fall.",
+      "is struggling to stand and needs immediate triage.",
+      "has severe pain and must be seen straight away.",
+      "is breathing quickly and needs urgent attention."
+    ];
+
+    dataApi.update(function (data) {
+      var appointment = createGeneratedAppointment(data, {
+        templates: emergencyTemplates.map(function (reason) {
+          return { reason: reason, severity: "high" };
+        }),
+        petStride: 3,
+        immediate: true,
+        status: "in progress"
+      });
+
+      if (!appointment) {
+        return;
+      }
+
+      uiState.selectedAppointmentId = appointment.id;
+    });
+
+    uiState.appointmentPanel = "detail";
+    window.location.hash = "appointments";
+    setNotice("success", "Emergency case added for immediate appointment.");
+    renderApp();
+  }
+
+  function toggleAppointmentTimer() {
+    var enabled = !getAppointmentTimerEnabled();
+    setAppointmentTimerEnabled(enabled);
+    syncAppointmentTimer();
+    setNotice("success", enabled ? "Automatic appointment timer enabled." : "Automatic appointment timer disabled.");
     renderApp();
   }
 
@@ -2389,6 +2458,114 @@
     uiState.selectedPetId = null;
     setNotice("success", "Pet deleted.");
     renderApp();
+  }
+
+  function syncAppointmentTimer() {
+    if (appointmentTimerId) {
+      window.clearInterval(appointmentTimerId);
+      appointmentTimerId = null;
+    }
+
+    if (!getSession() || !getAppointmentTimerEnabled()) {
+      return;
+    }
+
+    appointmentTimerId = window.setInterval(function () {
+      addTimedAppointmentCase();
+    }, getAppointmentTimerInterval());
+  }
+
+  function addTimedAppointmentCase() {
+    var timedTemplates = [
+      { reason: "has suddenly stopped eating and needs a gentle urgent check.", severity: "medium" },
+      { reason: "is wobbling after play and needs triage this week.", severity: "high" },
+      { reason: "has a sore paw and needs a quick follow-up appointment.", severity: "medium" },
+      { reason: "is very quiet today and should be reviewed soon.", severity: "high" }
+    ];
+    var createdAppointment = null;
+    var createdPetName = "";
+
+    dataApi.update(function (data) {
+      createdAppointment = createGeneratedAppointment(data, {
+        templates: timedTemplates,
+        petStride: 7,
+        dayOffsetRange: 7,
+        immediate: false,
+        status: "booked",
+        randomize: true
+      });
+
+      if (!createdAppointment) {
+        return;
+      }
+
+      var pet = findById(data.pets, createdAppointment.petId);
+      createdPetName = pet ? pet.name : "A pet";
+    });
+
+    if (!createdAppointment) {
+      return;
+    }
+
+    showToast("New appointment added for " + createdPetName + ".");
+    renderApp();
+  }
+
+  function createGeneratedAppointment(data, options) {
+    var pets = data.pets;
+    var templates = options.templates || [];
+
+    if (!pets.length || !templates.length) {
+      return null;
+    }
+
+    var petIndex = options.randomize ? Math.floor(Math.random() * pets.length) : (data.appointments.length * (options.petStride || 1)) % pets.length;
+    var templateIndex = options.randomize ? Math.floor(Math.random() * templates.length) : data.appointments.length % templates.length;
+    var pet = pets[petIndex];
+    var template = templates[templateIndex];
+    var startsAt = new Date();
+
+    if (options.immediate) {
+      startsAt = new Date();
+    } else {
+      startsAt.setDate(startsAt.getDate() + (options.randomize ? Math.floor(Math.random() * (options.dayOffsetRange || 7)) : (data.appointments.length % (options.dayOffsetRange || 7)) + 1));
+      startsAt.setHours(
+        options.randomize ? 8 + Math.floor(Math.random() * 10) : 9 + (data.appointments.length % 7),
+        options.randomize ? (Math.random() < 0.5 ? 0 : 30) : data.appointments.length % 2 ? 30 : 0,
+        0,
+        0
+      );
+    }
+
+    var appointment = {
+      id: nextId("appt", data.appointments),
+      petId: pet.id,
+      clientId: pet.clientId,
+      startsAt: startsAt.toISOString(),
+      reason: pet.name + " " + template.reason,
+      severity: template.severity,
+      status: options.status || "booked",
+      notes: []
+    };
+
+    data.appointments.push(appointment);
+    return appointment;
+  }
+
+  function showToast(message) {
+    uiState.toast = {
+      id: String(Date.now()),
+      message: message
+    };
+
+    if (toastTimerId) {
+      window.clearTimeout(toastTimerId);
+    }
+
+    toastTimerId = window.setTimeout(function () {
+      uiState.toast = null;
+      renderApp();
+    }, 3200);
   }
 
   function exportData() {
